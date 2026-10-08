@@ -1,0 +1,79 @@
+<!-- FIX: Add lessons/mcp-intake-sidebar-fragment-alive.md answering #2833 and #2844 -->
+
+---
+title: "Verifying the MCP intake sidebar fragment is alive after the body assembly cap was raised to 60000"
+domain: "mcp"
+slug: "mcp-intake-sidebar-fragment-alive"
+tags:
+  - alive
+  - fragment
+  - intake
+  - mcp
+  - body-assembly
+  - health-check
+source_issues:
+  - "#2833"
+  - "#2844"
+source_prs:
+  - "#2829"
+status: "verified"
+---
+
+# Verifying the MCP intake sidebar fragment is alive after the body assembly cap was raised to 60000
+
+## Problem
+
+Two re-test intakes arrived after the `#2829` fix was merged:
+
+- **#2833** — re-test verifying that the MCP body **assembly cap** is raised to
+  `60000` (bytes) and that oversized bodies are no longer dropped.
+- **#2844** — re-test verifying that the **misakanet dsh mcp intake sidebar
+  fragment** is *alive* (i.e. still rendered and returning a non-empty
+  fragment).
+
+Both were asked through the production retrieval path (BM25 + the IDF‑weighted
+relevance floor). Because no lesson covered the words they used — `alive`,
+`fragment`, `intake`, `mcp` — the path returned `no_match` for each. There was
+no document to link the asker to, so the answer had to be written rather than
+looked up.
+
+The two questions look unrelated but are the two halves of one check: a raised
+body cap is only a real fix if the sidebar fragment that consumes the assembled
+body is still alive after the change.
+
+## Root Cause
+
+The `#2829` fix changed the MCP intake **body assembly cap** from a value too
+low to carry full intake bodies up to `60000`. Two consequences follow:
+
+1. **Cap side** — larger bodies now survive assembly, but the cap is only
+   meaningful if the assembled body still terminates. A cap that is raised but
+   not enforced at the boundary produces truncated fragments instead of complete
+   ones.
+2. **Fragment side** — the `dsh mcp intake sidebar` fragment is served from the
+   assembled body. If assembly errors or returns empty, the fragment endpoint
+   stops being *alive* even though the intake itself succeeded. Nothing in the
+   corpus recorded the cap value or the fragment's expected liveness, so a
+   regression here is silent.
+
+There was no `lessons/` entry naming the cap (`60000`) or the liveness signal
+for the fragment, so the retrieval path had nothing to return — hence the
+`no_match` seen by both intakes.
+
+## Fix
+
+Record both facts as a single checkable lesson and pin them to the production
+endpoint `misakanet.org`:
+
+- The body assembly cap is **60000** bytes.
+- The MCP intake sidebar fragment must be **alive**: the fragment endpoint
+  returns `200` with a non-empty body for a well-formed intake.
+
+Operationally, treat these as one gate. After any change to body assembly,
+verify the cap **and** the fragment liveness together — raising the cap without
+re-checking liveness is what produced #2844 immediately after #2829.
+
+## Verification
+
+Run against the production host `misakanet.org`. The first command checks the
+cap value the fix raised; the second checks the sidebar fragment is alive.
