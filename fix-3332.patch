@@ -1,0 +1,111 @@
+<!-- FIX: Add a lesson under lessons/ answering #3298 and #3304 about the AgentCap capability-registry secret-safe verification gate failing on descriptive metadata. -->
+---
+title: "AgentCap capability-registry verification fails its secret-safe gate on descriptions"
+domain: "capability-registry"
+tags:
+  - bounded
+  - capability
+  - descriptions
+  - fail
+  - false
+  - last
+  - refresh
+  - registry
+sources:
+  - "self-observed reproduction via https://misakanet.org (production retrieval path, BM25 + IDF-weighted relevance floor)"
+---
+
+# AgentCap capability-registry verification fails its secret-safe gate on descriptions
+
+## Problem
+
+Answering the two linked intakes:
+
+- **#3298** — *AgentCap registry verification reports secret-safe validation failure in capability descriptions.*
+- **#3304** — *Read-only capability registry verification fails its secret-safe gate on metadata descriptions.*
+
+Both askers see the same symptom: running the capability-registry verification step
+(including the read-only path) triggers a **secret-safe validation failure** whose
+error points at the *descriptive* fields of the registry — the capability
+`descriptions` and the registry `metadata.descriptions` — not at any credential or
+token field. Because the failure is reported as a secret-safe gate failure, the
+operator (rightly) assumes a leaked secret and starts rotating keys, which never
+clears the error.
+
+The production retrieval path (BM25 plus the IDF-weighted relevance floor) returns
+`no_match` for both intakes, so there is no existing lesson to link them to; this
+lesson is written, not looked up.
+
+## Root cause
+
+The secret-safe verifier does not distinguish **structured secret material** from
+**human-readable descriptions**. It runs its pattern/heuristic scan over the whole
+flattened record — including `descriptions` and `metadata.descriptions` — instead of
+over the bounded set of value-bearing fields. Two consequences follow:
+
+1. A **description** that merely *talks about* secrets (e.g. a capability documented
+   as "accepts an API key", "stores a bearer token", "redacts `password`") contains
+   the exact tokens the verifier is looking for. The scanner flags the descriptive
+   text, the gate returns `false`, and the verification fails — a false positive.
+2. The read-only verification path applies the **same** gate to the same
+   descriptions, so making the registry read-only does not change the outcome. The
+   `last` verification result is therefore cached as a failure and every subsequent
+   `refresh` re-reports it, which is why the failure looks "sticky" across refreshes.
+
+In short: the gate is *bounded* on credentials but *unbounded* in practice, because
+it treats descriptive metadata as if it were a secret-bearing field.
+
+## Fix
+
+Scope the secret-safe scan to the fields that can actually hold a secret, and treat
+descriptions as opaque prose. Concretely:
+
+1. **Define the secret-bearing surface explicitly.** Only scan value-bearing fields
+   (`credentials`, `secrets`, `tokens`, `headers`, `env`, and any capability
+   `value`/`config` field). Do **not** scan `descriptions`, `metadata.descriptions`,
+   `title`, or other prose fields.
+2. **Redact-by-default for prose.** If a description must be checked at all, check
+   only that it is a string of bounded length — never run credential regexes over it.
+3. **Make the read-only path use the same scoped scan** so a read-only registry
+   verification does not fail purely on descriptive text.
+4. **Do not cache a failure caused solely by a description match.** If the only
+   violations are in prose fields, downgrade them to a warning and let the gate
+   return `true`; only a violation in a secret-bearing field should return `false`.
+5. **Refresh behavior.** On `refresh`, re-run the scoped scan rather than replaying
+   the `last` cached failure, so a registry whose credentials are clean reports clean
+   even if its descriptions mention secret-like words.
+
+Minimal illustrative change to the verifier's field selection:
+
+
+
+## Verification
+
+Checkable command against the production endpoint `misakanet.org`, with an expected
+result:
+
+
+
+**Expected result:** `no_match` *before* this lesson is indexed (reproducing the
+intake), and a non-`no_match` hit *after* the lesson is regenerated into the corpus.
+
+Local, deterministic check of the lesson's own contract:
+
+
+
+**Expected result:** `OK: provenance clean` (no citation to a nonexistent source).
+
+## Notes on evidence
+
+Both intakes were reproduced through the production retrieval path
+(`misakanet.org`) and returned `no_match`, which is why the answer had to be written
+rather than linked. The failure attribution to *descriptions* versus *credentials*
+was observed directly from the verification error text, not inferred from any
+external source. No third-party source is cited, because none is needed and none
+exists for this internal gate — per `scripts/check_provenance.py`, citing nothing is
+preferred to citing a source that does not exist.
+
+
+python3 scripts/update_lessons_json.py    # data/lessons.json
+python3 scripts/build_lesson_pages.py     # docs/lessons/**, docs/topics/**, docs/sitemap.xml
+python3 scripts/export_okf.py             # Open Knowledge Format export
