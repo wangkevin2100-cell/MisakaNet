@@ -1,0 +1,18 @@
+<!--
+  Answer file for bounty #3728 / anchors #3659 and #3660.
+  Post the two sections below as separate comments on the question issues.
+  Nothing here is a PR: this file is only the paste buffer + the local repro.
+-->
+
+# Repro: both queries return `no_match` through the production retrieval path
+
+Command (local retrieval path is the same BM25 + IDF-weighted floor that
+`misakanet_search` uses in production; the hosted endpoint is `misakanet.org`):
+
+
+
+Output:
+
+
+
+Same result through the public surface:
