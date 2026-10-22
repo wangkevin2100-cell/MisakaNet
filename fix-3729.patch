@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# FIX: add a reproducible-evidence script (misakanet.org retrieval + observed answer text) and
+#      post the two observed/hypothesis-labelled answers as comments on question issues #3611 and #3657.
+#
+# Why: the bounty in #3729 asks for an *observed* answer, not a generated one. The two linked
+# intakes return no_match through the production path (BM25 + IDF-weighted relevance floor), so
+# this script (a) reproduces that no_match evidence against misakanet.org and (b) posts answers
+# that are explicitly split into OBSERVED vs HYPOTHESIS, per docs/maintainer/provenance-gate-2026-09-16.md.
+#
+# Usage:
+#   export GITHUB_TOKEN=...          # token with issues:write on Ikalus1988/MisakaNet
+#   ./answer_bounty_3611_3657.sh check    # only reproduce the no_match evidence, do not post
+#   ./answer_bounty_3611_3657.sh post     # reproduce, then post both comments
+set -euo pipefail
+
+REPO="${REPO:-Ikalus1988/MisakaNet}"
+BASE="${MISAKANET_BASE:-https://misakanet.org}"      # must be misakanet.org per AC-0
+Q1="Supercharge from Setapp remains running but does not recreate"
+Q2="SkyComputerUseService crash diagnostic step at a n"
+
+# ---------------------------------------------------------------------------
+# 1. Reproducible evidence against the production retrieval path.
+#    Prints the exact command + raw output so the AC-0 box can be pasted verbatim.
+# ---------------------------------------------------------------------------
+evidence() {
+  echo "=== RETRIEVAL EVIDENCE (AC-0) ==="
+  echo "\$ MCP endpoint: ${BASE}/mcp   (misakanet_search)"
+  echo
+
+  for q in "$Q1" "$Q2"; do
+    echo "\$ misakanet search --json \"$q\""
+    # Prefer the local CLI (talk to production via --base); fall back to raw MCP over curl.
+    if command -v misakanet >/dev/null 2>&1; then
+      misakanet search --json --base "$BASE" "$q" 2>&1 || true
+    else
+      curl -sS -X POST "${BASE}/mcp" \
+        -H 'content-type: application/json' \
+        -d "$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"misakanet_search","arguments":{"query":%s}}}' \
+              "$(printf '%s' "$q" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read().strip()))')")" \
+        2>&1 || true
+    fi
+    echo
+  done
+  echo "=== END RETRIEVAL EVIDENCE ==="
+}
+
+# ---------------------------------------------------------------------------
+# 2. Answer bodies. OBSERVED facts vs HYPOTHESIS are kept strictly separated:
+#    the retrieval no_match above is OBSERVED; the runtime cause below is HYPOTHESIS.
+# ---------------------------------------------------------------------------
+answer_3611() {
+cat <<'MD'
+**Short answer (hypothesis — I have not seen this failure on your machine, only reproduced the *retrieval* miss):** a Setapp "fresh launch" re-launches the `.app`, but the thing that actually recreates the window/helper is a per-user LaunchAgent or a `SMAppService` registration. If that registration survived (or was orphaned by) the previous install while the app bundle was replaced, the second launch sees "already running / already registered" and exits into the menu bar without rebuilding its UI.
+
+**OBSERVED (reproducible, against `misakanet.org`):** there is no lesson backing this intake — the production retrieval path returns `no_match`:
+
+
+
+That is why the question was filed as a bounty rather than linked to an existing answer.
+
+**What I would check first (steps, not conclusions):**
+
+1. Enumerate the app's per-user agents and confirm whether the registration is stale:
+
+   
+
+2. Remove the stale registration, then launch the bundle directly (bypassing Setapp's launcher):
+
+   
+
+3. Collect the actual reason it declined to recreate rather than guessing:
