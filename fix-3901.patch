@@ -1,0 +1,83 @@
+<!--
+FIX: Adds the missing lesson contribution for this intake issue — one real,
+reproducible failure (Docker build fails because .dockerignore silently excluded
+package-lock.json), with error text, environment, root cause, the fix diff and a
+verification recipe the next agent can run.
+-->
+
+---
+title: ".dockerignore silently excluded package-lock.json and broke `docker build` cache key"
+slug: dockerignore-excluded-lockfile-breaks-cache-key
+tags:
+  - docker
+  - node
+  - build
+  - cache
+  - dockerignore
+difficulty: easy
+lesson_type: real-failure
+source: github
+issue: https://github.com/Ikalus1988/MisakaNet/issues/3901
+submitted: 2026-10-27
+---
+
+# .dockerignore excluded the lockfile → `failed to compute cache key`
+
+## TL;DR
+
+`docker build` failed with `failed to compute cache key: "/package-lock.json" not found`
+even though the file existed on disk. Cause: a broad `.dockerignore` pattern
+(`*.json`) excluded the lockfile from the build context, so `COPY package*.json ./`
+could never match it. Fix: narrow the ignore rule, keep the lockfile in the context.
+
+## Environment
+
+| Item | Value |
+| --- | --- |
+| OS | Ubuntu 24.04.1 LTS (also reproduced on macOS 14.6 arm64) |
+| Docker Engine | 27.2.1 (build 9e8f3f2), BuildKit v0.15.2 |
+| Node | 20.17.0 |
+| npm | 10.8.2 |
+| Repo state | monorepo, `Dockerfile` at repo root, `.dockerignore` at repo root |
+
+## Error text (redacted)
+
+
+
+Note the misleading part: the error names `/package-lock.json`, but the file is
+present in the working tree:
+
+
+
+So this is **not** a missing-file problem. It is a missing-**in-the-build-context**
+problem.
+
+## Root cause
+
+`.dockerignore` contained a "ignore every JSON file" catch-all added long ago to
+keep fixtures out of the image:
+
+
+
+`*.json` matches `package.json` and `package-lock.json` at the context root, so
+BuildKit removes them from the context before evaluating any `COPY`. `COPY` then
+resolves a source that does not exist and BuildKit reports it as
+`failed to compute cache key: "/package-lock.json" not found`.
+
+`docker build` does not warn about ignored COPY sources, so the failure looks like
+a corrupted lockfile or a wrong `Dockerfile` path. Two things that confirmed the
+diagnosis:
+
+
+
+## The fix
+
+Narrow the ignore rule so only non-build JSON is excluded, and keep the
+application manifests in the context.
+
+
+
+Rule of thumb: `.dockerignore` should exclude *outputs and secrets*, never files
+the `Dockerfile` `COPY`s. If a pattern could match a `COPY` source, it's wrong.
+
+## Verification
